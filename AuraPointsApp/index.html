@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Aura Points</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+  <header class="header">
+    <h1>Aura Points</h1>
+    <div class="menu">
+      <button id="menu-btn">⋮</button>
+      <div id="menu-dropdown" class="hidden">
+        <button id="admin-login-btn">Admin Login</button>
+        <button id="admin-dashboard-btn" class="hidden">Dashboard</button>
+        <button id="admin-logout-btn" class="hidden">Logout</button>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section id="home-screen" class="screen">
+      <div class="search-bar">
+        <input type="text" id="search-input" placeholder="Search players..." />
+      </div>
+      <div class="main-layout">
+        <div class="players-section">
+          <h2>All Players</h2>
+          <div id="user-list"></div>
+        </div>
+        <div class="sidebar">
+          <h2>Leaderboard</h2>
+          <div id="leaderboard"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="login-screen" class="screen hidden">
+      <h2>Admin Login</h2>
+      <form id="login-form">
+        <input type="text" id="username" placeholder="Username" required />
+        <input type="password" id="password" placeholder="Password" required />
+        <button type="submit">Login</button>
+      </form>
+    </section>
+
+    <section id="admin-screen" class="screen hidden">
+      <h2>Admin Dashboard</h2>
+      <form id="add-form">
+        <input type="text" id="new-name" placeholder="New player name" required />
+        <button type="submit">Add Player</button>
+      </form>
+      <div id="admin-user-list"></div>
+      <h3>Log History</h3>
+      <div id="log-history"></div>
+    </section>
+  </main>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.9.1/firebase-app.js";
+    import {
+      getFirestore, collection, getDocs, addDoc, updateDoc, deleteDoc, doc, setDoc
+    } from "https://www.gstatic.com/firebasejs/11.9.1/firebase-firestore.js";
+
+    // --- Firebase setup ---
+    const firebaseConfig = {
+      apiKey: "AIzaSyBy1Gxs3aambtIb6CCCmLGfBvFBU31bMa4",
+      authDomain: "aurapoints-d9c28.firebaseapp.com",
+      projectId: "aurapoints-d9c28",
+      storageBucket: "aurapoints-d9c28.firebasestorage.app",
+      messagingSenderId: "531713474163",
+      appId: "1:531713474163:web:739a0fcf872d5732b57406"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+    const playersRef = collection(db, "players");
+    const logsRef = collection(db, "logs");
+
+    // --- App state ---
+    let currentUser = { username: "", isAdmin: false };
+
+    // --- DOM ---
+    const loginScreen = document.getElementById("login-screen");
+    const homeScreen = document.getElementById("home-screen");
+    const adminScreen = document.getElementById("admin-screen");
+    const loginForm = document.getElementById("login-form");
+    const addForm = document.getElementById("add-form");
+    const userList = document.getElementById("user-list");
+    const adminUserList = document.getElementById("admin-user-list");
+    const logHistory = document.getElementById("log-history");
+    const leaderboard = document.getElementById("leaderboard");
+    const menuBtn = document.getElementById("menu-btn");
+    const menuDropdown = document.getElementById("menu-dropdown");
+    const loginBtn = document.getElementById("admin-login-btn");
+    const dashboardBtn = document.getElementById("admin-dashboard-btn");
+    const logoutBtn = document.getElementById("admin-logout-btn");
+    const searchInput = document.getElementById("search-input");
+
+    const backBtn = document.createElement("button");
+    backBtn.innerText = "← Back to Main Page";
+    backBtn.className = "back-btn";
+    backBtn.onclick = () => {
+      adminScreen.classList.add("hidden");
+      homeScreen.classList.remove("hidden");
+    };
+
+    // --- Helpers ---
+    function updateMenuVisibility() {
+      loginBtn.style.display = currentUser.isAdmin ? "none" : "block";
+      dashboardBtn.style.display = currentUser.isAdmin ? "block" : "none";
+      logoutBtn.style.display = currentUser.isAdmin ? "block" : "none";
+    }
+
+    function getAuraClass(aura) {
+      if (aura >= 20000) return "mythic";
+      if (aura >= 15000) return "legendary";
+      if (aura >= 10000) return "epic";
+      if (aura >= 5000) return "elite";
+      return "normal";
+    }
+
+    // --- Firebase functions ---
+    async function loadPlayers() {
+      const snap = await getDocs(playersRef);
+      return snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    }
+
+    async function loadLogs() {
+      const snap = await getDocs(logsRef);
+      return snap.docs.map(doc => doc.data());
+    }
+
+    async function addPlayer(name) {
+      await setDoc(doc(playersRef, name), { name, aura: 5000 });
+      await addLog(`Added player ${name}`);
+    }
+
+    async function updatePlayerAura(name, delta, adminName) {
+      const playerDoc = doc(playersRef, name);
+      const snap = await getDocs(playersRef);
+      const player = snap.docs.find(d => d.id === name);
+      if (player) {
+        const newAura = player.data().aura + delta;
+        await updateDoc(playerDoc, { aura: newAura });
+        await addLog(`${adminName} gave ${delta > 0 ? "+" : ""}${delta} to ${name}`);
+      }
+    }
+
+    async function removePlayer(name, adminName) {
+      await deleteDoc(doc(playersRef, name));
+      await addLog(`${adminName} removed ${name}`);
+    }
+
+    async function addLog(message) {
+      await addDoc(logsRef, {
+        message,
+        timestamp: new Date().toLocaleString()
+      });
+    }
+
+    // --- Render ---
+    async function renderUsers(container, isAdmin = false) {
+      const players = await loadPlayers();
+      const search = searchInput.value.toLowerCase();
+      const filtered = players.filter(p => p.name.toLowerCase().includes(search));
+
+      container.innerHTML = "";
+      filtered.forEach(user => {
+        const card = document.createElement("div");
+        card.className = `friend-card ${getAuraClass(user.aura)}`;
+        card.innerHTML = `<div class="friend-header">${user.name} — ${user.aura} pts</div>`;
+
+        if (isAdmin) {
+          const controls = document.createElement("div");
+          controls.className = "admin-controls";
+
+          const input = document.createElement("input");
+          input.type = "number";
+          input.placeholder = "± aura";
+          input.classList.add("aura-input");
+
+          const btn = document.createElement("button");
+          btn.innerText = "↺";
+          btn.onclick = async () => {
+            const val = parseInt(input.value);
+            if (!isNaN(val)) {
+              await updatePlayerAura(user.name, val, currentUser.username);
+              refreshAll();
+            }
+          };
+
+          const removeBtn = document.createElement("button");
+          removeBtn.innerText = "Remove Player";
+          removeBtn.onclick = async () => {
+            if (confirm(`Remove ${user.name}?`)) {
+              await removePlayer(user.name, currentUser.username);
+              refreshAll();
+            }
+          };
+
+          controls.appendChild(input);
+          controls.appendChild(btn);
+          card.appendChild(controls);
+          card.appendChild(removeBtn);
+        }
+
+        container.appendChild(card);
+      });
+    }
+
+    async function renderLeaderboard() {
+      const players = await loadPlayers();
+      leaderboard.innerHTML = players.sort((a, b) => b.aura - a.aura)
+        .map(p => `<div class="${getAuraClass(p.aura)}">${p.name}: ${p.aura} pts</div>`)
+        .join("");
+    }
+
+    async function renderLogs() {
+      if (!currentUser.isAdmin) return;
+      const logs = await loadLogs();
+      logHistory.innerHTML = logs.length
+        ? logs.slice(0, 50).map(l => `<div>${l.timestamp} - ${l.message}</div>`).join("")
+        : "<i>No log entries</i>";
+    }
+
+    async function refreshAll() {
+      await renderUsers(userList, false);
+      await renderLeaderboard();
+      if (currentUser.isAdmin) {
+        await renderUsers(adminUserList, true);
+        await renderLogs();
+      }
+    }
+
+    // --- Event bindings ---
+    menuBtn.onclick = () => menuDropdown.classList.toggle("hidden");
+
+    loginBtn.onclick = () => {
+      loginScreen.classList.remove("hidden");
+      homeScreen.classList.add("hidden");
+      adminScreen.classList.add("hidden");
+      menuDropdown.classList.add("hidden");
+    };
+
+    loginForm.onsubmit = (e) => {
+      e.preventDefault();
+      const u = document.getElementById("username").value.trim();
+      const p = document.getElementById("password").value.trim();
+      if (u === "admin" && p === "pass") {
+        currentUser = { username: u, isAdmin: true };
+        loginScreen.classList.add("hidden");
+        homeScreen.classList.add("hidden");
+        adminScreen.classList.remove("hidden");
+        if (!adminScreen.contains(backBtn)) adminScreen.prepend(backBtn);
+        updateMenuVisibility();
+        refreshAll();
+      }
+    };
+
+    dashboardBtn.onclick = () => {
+      homeScreen.classList.add("hidden");
+      adminScreen.classList.remove("hidden");
+      refreshAll();
+      menuDropdown.classList.add("hidden");
+    };
+
+    logoutBtn.onclick = () => {
+      currentUser = { username: "", isAdmin: false };
+      document.getElementById("username").value = "";
+      document.getElementById("password").value = "";
+      adminScreen.classList.add("hidden");
+      homeScreen.classList.remove("hidden");
+      updateMenuVisibility();
+      menuDropdown.classList.add("hidden");
+    };
+
+    addForm.onsubmit = async (e) => {
+      e.preventDefault();
+      const name = document.getElementById("new-name").value.trim();
+      if (name) {
+        await addPlayer(name);
+        addForm.reset();
+        refreshAll();
+      }
+    };
+
+    searchInput.addEventListener("input", () => renderUsers(userList, false));
+
+    // --- INIT ---
+    refreshAll();
+    updateMenuVisibility();
+  </script>
+</body>
+</html>
